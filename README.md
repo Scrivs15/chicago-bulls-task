@@ -41,15 +41,15 @@ This repository contains the following the following files/folders:
 * jscrivener_u3227529_a4.Rmd - The raw R Markdown file used to generate the main
 report;
 * jscrivener_u3227529_a4.md - A markdown file generated from the R Markdown file
-so the rendered report can viewed in Github;
+so the rendered report can be viewed in Github;
 * jscrivener_u3227529_a4.html - The main report itself, detailing the entire
 process of the project;
-* README.md - Outlining background information required to understand the 
-project;
+* README.md - Outlining the repository contents and background information required
+*  to understand the project;
 * 10157A4-Jscrivener-u3227529.Rproj - An Rstudio project file used to 
 organise the project during development;
 * background.css - A css file setting out the Chicago Bulls logo as a background
-watermark;
+watermark in the html report;
 * /data - A data folder, containing /raw (raw csv files used in the project) and
 /processed (processed files following tidying);
 * /figs - A figures folder, containing figures rendered from the project;
