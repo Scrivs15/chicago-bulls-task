@@ -1,0 +1,861 @@
+---
+title: "Reproducible Data Analysis Project (A4)"
+author: "Joel Scrivener"
+date: "06/05/2021"
+output: 
+  html_document:
+    css: background.css
+    toc: true
+    toc_float: true
+    theme: cerulean
+    highlight: tango
+    df_print: paged
+    code_folding: show
+    keep_md: true
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.path = "figs/")
+```
+
+## Introduction ##
+
+I have been tasked with identifying the **five best starting players the Chicago
+Bulls can afford**. The team has a budget of **$118 million** next season, the 
+5th-lowest in the NBA.
+
+In order to achieve this, this project aims to build a model to determine which 
+metrics most contribute to winning matches in basketball. Then, we will fit each 
+player in the league into this model, searching for the players who add the most 
+value. Finally, we will determine whether or not these players are affordable 
+within the confines of the Bulls' budget.
+
+This project is significant to the success of the Bulls for several reasons. First,
+it aims to identify and quantify what actions *actually* contribute to winning
+games. Though different players and coaches may subjectively value different 
+skills and prefer varying approaches to the game, data analysis has the potential
+to present an alternative, objective point of view.
+
+Second, the NBA employs a salary cap system (1). In this environment - where teams
+must be built from a pool of finite resources - obtaining optimal value is important. For a
+team such as the Bulls, whose roster budget is even lower than that of the salary
+cap, maximising value is particularly crucial in order to be competitive. The success
+of this project then, has the potential to contribute to the success of the organisation.
+
+Before beginning, it is necessary to understand basic background information
+about the sport. It is known that we are looking for **the best five starting 
+players**. These starting players fill five positions on a basketball team. They are:
+
+* **Point guard** - The primary playmaker, tasked with distributing the ball while
+minimising turnovers;
+* **Shooting guard** - A reliable shooter, who will take over distribution when the
+point guard is unavailable;
+* **Small Forward** - A diverse all-rounder, who must be strong on both offense
+and defense;
+* **Power Forward** - The second-tallest player in the line-up, generally - but
+not necessarily - positioned near the rim; and
+* **Center** - The tallest in the team, who spends most of the game positioned
+near the rim both offensively and defensively, resulting in a high rebound total.(2)
+
+Statistics available for measuring performance can vary from the relatively
+simple counting statistics (eg. field goals attempted, field goals made), to the
+more complex (eg. pace, defensive rating). Points are scored by either field goals -
+ which can be further sub-divided into 2-pointers and 3-pointers - and free throws.
+Accodingly, commonly reported scoring metrics for each type of shot include 
+attempts, shots made and shot percentage. With a game's winner determined by the points
+total, it seems intuitive that metrics related to point scoring or defending would
+be key. However, given the wide range of available statistics, identification of
+which statistics contribute the most is not immediately obvious. It is intended 
+that by the end of this project we will have a better idea of which key metrics 
+are the most important.
+
+## Reading and Cleaning the Raw Data ##
+
+Before beginning, we'll load up the packages required for this process. These
+include the tidyverse, the broom package, the janitor package, corrplot, plotly,
+and ggrepel.
+
+```{r}
+library(tidyverse)
+library(broom)
+library(janitor)
+library(corrplot)
+library(plotly)
+library(ggrepel)
+```
+
+Now, we will import the raw data files. These include two csv files
+containing team statistics (we'll call these **dat1** and **dat2**), one including 
+player statistics (we'll call this **player**) and one including player salaries (we'll 
+call this **salaries**). 
+
+Within the team datasets, each observation represents eachof the 30 teams in the NBA, 
+with each variable providing season totals from 2018-19. In the player dataset, 
+each observation represents an individual player in the NBA, with each variable
+providing cumulative season totals from 2018-19. In the salary dataset,
+each observation is for each player, and contains each player's annual salary for
+the current year.
+
+**NOTE:** Full descriptions of each variable contained in the above files can be found at
+[this link](https://unicanberra.instructure.com/courses/9531/pages/data-description-reproducible-data-analysis-project) (3).
+
+Since we can see that the team stat file names are 
+identical with sequential numbering, we can read these in with a loop, rather 
+than writing them out in full twice.
+
+```{r}
+n <- 1:2 #create a vector with the file numbers
+
+for(i in n){ #loop through the files
+  assign(paste("dat", as.character(i), sep = ""), #assigns each file to an object named "dat[i]"
+         read_csv(paste("data/raw/2018-19_nba_team-statistics_", as.character(i),
+                        ".csv", sep = ""))) #reads in each file
+}
+
+player <- read_csv("data/raw/2018-19_nba_player-statistics.csv")
+salaries <- read_csv("data/raw/2018-19_nba_player-salaries.csv")
+```
+
+A warning appeared informing us that empty column names have been filled in as
+**'x23'**, **'x24'** and **'x25'** in our new **dat1** object. We'll look at the structure and
+check for missing values to see what's going on.
+
+```{r}
+str(dat1)
+head(dat1)
+tail(dat1)
+naniar::vis_miss(dat1)
+```
+
+We can see that the **'Team'** column contains character variables (the team names),
+while the rest contain numeric variables. However, the three 'new' columns
+contain logical variables. Using naniar::vis_miss, we can see that these 
+'logical' variables are just NAs, and these columns are effectively empty. So, 
+we'll delete these columns entirely, and save it back into the **dat1** object.
+
+```{r}
+dat1 <- remove_empty(dat1, which = "cols") #remove empty columns
+```
+
+Now we'll examine the structure of **dat2**.
+
+```{r}
+str(dat2)
+head(dat2)
+tail(dat2)
+```
+
+Here, it can be seen that the data takes the same format as **dat1** (that is, it
+contains a single character vector containing the team names, and the rest are 
+all continuous). Since they both contain team statistics, we will merge them into 
+a single object to make analysis easier, which we will simply call **team**. Then,
+we will delete the duplicated **Rank** column.
+
+```{r}
+team <- full_join(dat1, dat2, by = "Team")
+team <- subset(team, select = -c(Rk.y)) #remove the Rk.y variable
+str(team)
+```
+
+We now have our team stats all contained in a single tibble, however looking at 
+the structure, we notice that several columns contain illegal variable names 
+(that is, they either contain a '%', or begin with a number). So before 
+moving on, we will rename these columns.
+
+```{r}
+team <- rename(team,
+               x3PAr = '3PAr', TSp = 'TS%', eFGp = 'eFG%', TOVp = 'TOV%', 
+               ORBp = 'ORB%',DRBp = 'DRB%', FGp = 'FG%', x3P = '3P', 
+               x3PA = '3PA', x3Pp = '3P%', x2P = '2P', x2PA = '2PA', 
+               x2Pp = '2P%', FTp = 'FT%')
+```
+
+Next, we will convert all the variable names to lowercase.
+
+```{r}
+names(team) <- tolower(names(team)) #convert variable names to lowercase
+```
+
+
+Now that the team stats look tidy, we will check the structure of our player
+statistics.
+
+```{r}
+str(player)
+head(player)
+tail(player)
+```
+
+Here, we have noticed the same problem of illegal column names. We will address
+these now, too, and again convert the variable names to lowercase.
+
+```{r}
+player <- rename(player,
+               eFGp = 'eFG%', FGp = 'FG%', x3P = '3P', 
+               x3PA = '3PA', x3Pp = '3P%', x2P = '2P', x2PA = '2PA', 
+               x2Pp = '2P%', FTp = 'FT%')
+names(player) <- tolower(names(player)) #convert variable names to lowercase
+```
+
+There are duplicate entries for players who have been traded during the season. 
+We will take a closer look at these entries to understand what is going on.
+
+```{r}
+n_occur <- data.frame(table(player$player_name)) #counts number of observations per player
+
+n_occur[n_occur$Freq > 1,] #select those appearing more than once
+
+player[player$player_name %in% n_occur$Var1[n_occur$Freq > 1],] #subset the players identified above
+```
+
+Examining these entries, it can be seen that the multiple entries represent
+accumulating statistics from periods spent with different teams, culminating in 
+a 'total' observation for each player, indicated within the **team** variable by 
+"TOT". 
+Since we only want a single observation for each player, we will delete all 
+entries for players with multiple observations, where the Team variable is not
+"TOT".
+
+```{r}
+player <- player %>%
+  filter(!player_name %in% n_occur$Var1[n_occur$Freq > 1] | tm == "TOT") #remove players appearing more than once where 'tm' does NOT equal "TOT"
+```
+
+With each player now having a unique observation, we can now add the player 
+salaries to the player data. Since we can only use the observations that contain
+*both* player statistics *and* salaries, we will use an inner join.
+
+```{r}
+player <- player %>%
+  inner_join(salaries)
+```
+
+With the data tidied and consolidated into two tibbles, we will write them
+into new csv files in case we wish to use these datasets for another project
+later.
+
+```{r}
+write_csv(x = team, file = "data/processed/nba_team_stats.csv")
+write_csv(x = player, file = "data/processed/nba_player_stats.csv")
+```
+
+## Exploratory Analysis ##
+
+### Check for errors and missing values ###
+
+We will begin by checking for errors and missing values.
+
+```{r}
+naniar::vis_miss(team)
+```
+
+```{r}
+naniar::vis_miss(player)
+```
+
+Here, we have identified a number of missing values in our **player** object.
+Looking at the above chart, we can see that these are all in various percentage 
+columns (**fgp**, **x3pp**, **x2pp**, **efgp** and **ftp**), and after looking at 
+the data itself we can see that the cause of these NAs is dividing by zero. So to 
+make our analysis simpler down the track, we'll replace these NAs with zeroes.
+
+```{r}
+player[is.na(player)] <- 0 #replaces NAs with 0
+naniar::vis_miss(player)
+```
+
+### Check distributions ###
+
+The purpose of this project is to identify the **best players our team can
+afford**. In order to achieve this, we first need to answer the question *'what
+statistics contribute to wins in basketball?'* Then, we can use the model to
+identify players likely to contribute to wins.
+Therefore, we will use **wins** as the response variable.
+
+So, we will begin by checking the distribution of the **wins** variable.
+
+```{r}
+ggplot(data = team) +
+  geom_histogram(mapping = aes(x = w), colour = "red3", fill = "grey23", bins = 8)
+```
+
+The above looks roughly normal, with  perhaps some slight right skewness. This is likely
+the result of the small sample size (there are only 30 observations), and is
+considered satisfactory for exploration.
+
+Next, we will check the distribution of all the potential explanatory variables.
+
+```{r}
+distribution <- #builds a table where each variable and value is a unique observation, to enable simultaneous plotting with facet_wrap
+  pivot_longer(data = team, cols = c(age:pts), 
+               names_to = "variables", 
+               values_to = "values")
+  ggplot(data = distribution) +
+    stat_density(mapping = aes(x = values)) +
+    facet_wrap( ~ variables, scales = "free")
+```
+
+Looking at the above, it can be seen that most variables present as something
+resembling a normal distribution, with several clear exceptions.
+**Games** is missing, likely due to them all being identical (every team plays 82 
+games, so there is no variation of distribution).
+**Steals** are essentially flat, which is surprising.
+**2-pointers and attempts** and **3-pointers and attempts** skew heavily to the 
+right and left, respectively.
+
+### Check relationships between variables ###
+
+As a starting point, we will create a correlation matrix to get an idea of how the 
+different team stats relate to one another.
+
+```{r}
+step1 <- cor(team[3:45]) #computes the correlation between all variables selected
+corrplot(step1, tl.cex = 0.5) #builds correlation matrix
+```
+
+We can use the above matrix to identify stats that correlate strongly with **wins**,
+that we may wish to explore in more detail.
+We can see that there are strong positive correlations for **True Shooting percentage**, 
+**effective field goal percentage**, **defensive rebound percentage**, **field goals**,
+**field goal percentage**, **3-pointers**, **3-point attempts**, **3-point percentage**, 
+**2-point percentage**, **free throw percentage**, **defensive rebounds**, **total rebounds**, **assists**, **blocks** and (somewhat obviously) **points**.
+The only statistics with a moderately strong negative correlation are **turnovers** and 
+**turnover percentage**.
+
+We can plot these stats against wins in order to visualise the correlations.
+
+```{r}
+teamcheck <- #places the selected variables and values in individual observations, to allow simultaneous correlation with wins using facet_wrap
+  pivot_longer(data = team, cols = c(tsp, efgp, drbp, fg, fgp, x3p, x3pa, x3pp, 
+                                     x2pp, ftp, drb, trb, ast, blk, tov, tovp), 
+               names_to = "variables", 
+               values_to = "values")
+  ggplot(data = teamcheck) +
+    geom_point(mapping = aes(x = values, y = w)) +
+    facet_wrap( ~ variables, scales = "free")
+  
+```
+
+### Justification for data modelling decisions ###
+
+At a glance, our first thoughts are as follows:
+**Effective field goal percentage** and **True Shooting percentage** look to be 
+the most closely correlated with **wins**. However, on an individual level, 
+these numbers could easily be skewed based on team usage (for example, if
+a player is particularly good at shooting 3-pointers but is only used inside the
+paint, their **efgp** and **tsp** will be lower than they otherwise could have been). 
+Since our task is ultimately to identify players, using **x2pp** and **x3pp** 
+may be more appropriate, despite their slightly weaker correlations (with the intention 
+of our coaching staff could utilise the player more effectively).
+We notice that defensive rebounds and total rebounds both correlate well with
+**wins**. However, since total rebounds includes all defensive rebounds, using both 
+variables would be inappropriate due to collinearity. We'll opt for defensive 
+rebounds initially, as it visually appears to correlate marginally better.
+Other independent variables to consider are **assists**, **blocks** and 
+**turnovers**.
+
+## Data Modelling and Results ##
+
+### Data Modelling
+
+Using this data as a starting point, we can begin building a simple model to 
+predict **wins** using the variables identified above (**x2pp**, **x3pp**, **drb**,
+**ast**, **blk** and **tov**).
+
+```{r}
+fit1 <- team %>% 
+  lm(w ~ x2pp + x3pp + drb + ast + blk + tov, data = .) #builds linear model
+```
+
+We can then check the coefficients for the model:
+
+```{r}
+coefs1 <- tidy(fit1, conf.int = TRUE) #check coefficients
+coefs1
+```
+Then, we will also check the r-squared:
+
+```{r}
+summary(fit1) #check r-squared etc
+```
+
+The Adjusted R-squared value of **66%** means that the model explains roughly 66%
+of the variation in the response variable (**w**).
+
+Finally, we can plot the model:
+
+```{r}
+team %>% 
+   mutate(w_hat = predict(fit1, newdata = .)) %>% #creates a predicted wins variables from the model
+  ggplot(aes(w_hat, w, label = team)) + 
+  geom_point() +
+  geom_text(nudge_x=0.1, cex = 2) + 
+  geom_smooth(method = lm, se = FALSE)
+```
+
+The model looks reasonable, but looking at the coefficients above, we notice two things.
+
+First, while **assists** seemed to be positively correlated with wins in our initial
+investigation, the coefficient is now *negative*. This seems odd. 
+Second, looking at the P-values, **assists** has a very high value, suggesting
+that this prediction is not reliable, anyway. The P-value for **blocks** is also
+unacceptably high.
+
+So, we will remove **ast** and **blk** and try again.
+
+```{r}
+fit2 <- team %>%
+  lm(w ~ x2pp + x3pp + drb + tov, data = .) #builds new linear model
+```
+
+We will then check the coefficients for the model:
+```{r}
+coefs1 <- tidy(fit2, conf.int = TRUE) #check coefficients
+coefs1
+```
+
+Next, we will check the r-squared:
+
+```{r}
+summary(fit2) #check r-squared etc
+```
+
+Notice that the Adjusted R-squared value has improved to **68%** by removing those
+variables.
+
+Finally, we will plot the new model:
+```{r}
+lm_plot <- team %>%
+   mutate(w_hat = predict(fit2, newdata = .)) %>% #creates predicted wins variables from model
+  ggplot(aes(w_hat, w, label = team)) + 
+  geom_point() +
+  geom_text(nudge_x= 0.1, cex = 2) + 
+  geom_smooth(method = lm, se = FALSE)
+
+lm_plot
+```
+
+### Assumption Checking ###
+
+First, we will check for multicollinearity. This will be performed visually by 
+creating a pairs plot:
+
+```{r}
+pairs(formula = ~ x2pp + x3pp + drb + tov, data = team ) #pairs plot
+```
+
+In the plot above, we are looking for the points to be randomly distributed. From
+this test, there does not appear to be evidence of multicollinearity. 
+For further confirmation, we can also check for multicollineraity by calculating 
+the variance inflation factor (VIF).
+
+```{r}
+car::vif(fit2) #VIF calculation
+```
+A cut-off of 5 is typically recommended, so with all VIFs close to 1, this test
+confirms our conclusion that there is no evidence of multicollinearity.
+ 
+Next, we will check for independence of observations. This will be performed by
+conducting a Durbin-Watson test, in which the result should ideally be close to
+2.
+
+```{r}
+car::durbinWatsonTest(fit2) #Durbin-Watson test
+```
+We know from our analysis design that each observation is independent (they each
+represent totally different teams). This makes the D-W statistic of 1.39 
+surprising, but not alarming. It has likely been caused by the data being 
+arranged in order of team rank, so this result can be disregarded.
+
+Now, we will check for outliers. This test will be performed by calculating the
+standardised residuals.
+These are then placed on a plot, looking for residuals greater than 3, or that
+stand out relative to the rest of the points.
+
+```{r}
+std_res <- rstandard(fit2) #calculates standardised residuals
+points <- 1:length(std_res) #identifies the points
+
+ggplot(data = NULL, aes(x = points, y = std_res)) +
+  geom_point() +
+  ylim(c(-4,4)) +
+  geom_hline(yintercept = c(-3, 3), colour = "red", linetype = "dashed")
+```
+
+From the above, it can be seen that there are no significant outliers that 
+require investigation.
+
+Next, we will check for points of high leverage. Here, we obtain the 'hat 
+diagonals', which are values between 0 and 1, where 1 indicates higher leverage.
+
+```{r}
+hats <- hatvalues(fit2) #obtains hat diagonals
+
+ggplot(data = NULL, aes(x = points, y = hats)) +
+  geom_point()
+```
+
+There are no hat values greater than 0.5, however we may wish to investigate those
+greater than 0.3, as they appear to stand out more than the others. So, we will
+label these points for ease of identification.
+
+```{r}
+hat_labels <- if_else(hats >= 0.3, paste(points), "") #labels points valued >= 0.3
+
+ggplot(data = NULL, aes(x = points, y = hats)) +
+  geom_point() +
+  geom_text(aes(label = hat_labels), nudge_y = 0.02)
+```
+
+Next, we will look for points of high influence. This is performed using a Cook's 
+Distance test, looking for points that stand out from the rest.
+
+```{r}
+cook <- cooks.distance(fit2) #obtains Cook's distance values
+
+ggplot(data = NULL, aes(x = points, y = cook)) +
+  geom_point()
+```
+The points above 0.15 seem to be sticking out, so we will label them for further 
+investigation.
+
+```{r}
+cook_labels <- if_else(cook >= 0.15, paste(points), "") #creates labels for points valued >= 0.15
+
+ggplot(data = NULL, aes(x = points, y = cook)) +
+  geom_point() +
+  geom_text(aes(label = cook_labels), nudge_x = 2)
+```
+
+We will test for heteroscedascity by plotting the residuals against the fitted
+values.
+
+```{r}
+res <- residuals(fit2) #obtains model residuals
+fitted <- predict(fit2) #obtains predictions from model
+
+ggplot(data = NULL, mapping = aes(x = fitted, y = res)) +
+  geom_point(colour = "dodgerblue") +
+  geom_hline(yintercept = 0, colour = "red", linetype = "dashed") +
+  geom_smooth(method = lm, se = FALSE, colour = "magenta")
+```
+Here, we are looking for the points to be randomly distributed, with no clear
+pattern. This appears to be acceptable, though it is difficult to observe with
+so few points.
+
+Next, we will check for normality of residuals using a histogram.
+
+```{r}
+ggplot(data = NULL, mapping = aes(x = res)) +
+  geom_histogram(colour = "red3", fill = "grey23", binwidth = 2.5)
+```
+
+This doesn't look particularly skewed, however the extremely small bin (4th from
+the left) is unusual for a strictly normal distribution. To investigate further, we will 
+use a qq-plot, too.
+
+```{r}
+ggplot(data = NULL, mapping = aes(sample = res)) +
+  stat_qq() + stat_qq_line()
+```
+
+Here, the plot looks generally good, with the majority of points falling roughly
+on the reference line.
+The  thin tails in the qq-plot may indicate a moderate positive skewness. One possible
+solution would be to remove the identified points of high leverage and influence 
+(1 & 5) and try again. However, given the extremely small sample size (just 30 points), deleting these points is not appropriate, and collecting more data (for example, from previous 
+seasons) may help solve this issue.
+
+We will confirm linearity by creating partial regression plots. Here, we are
+looking for linear relationships between each explanatory variable and **wins**.
+
+```{r}
+car::avPlots(fit2) #added-variable plots for the model
+```
+
+The above plots confirm positive linear relationships between **2-point percentage**, 
+**3-point percentage**, **defensive rebounds** and **wins**, and a negative linear 
+relationship between **turnovers** and **wins**.
+
+### Model Output and Interpretation of the Model
+
+Having built the model and checked our assumptions, we will again plot the model,
+demonstrating that teams with higher predicted wins (**w_hat**), do indeed win
+more games (**w**).
+
+```{r}
+lm_plot <- team %>% #plot of predicted wins v wins
+   mutate(w_hat = predict(fit2, newdata = .)) %>%
+  ggplot(aes(w_hat, w, label = team)) + 
+  geom_point() +
+  geom_text(nudge_x=0.1, cex = 2) + 
+  geom_smooth(method = lm, se = FALSE)
+
+lm_plot
+```
+
+The above chart demonstrates that our model successfully predicts wins in the
+NBA with satisfactory accuracy. The next step is applying this model in order to 
+make player recommendations to the General Manager.
+
+To do this, we must first convert the relevant player stats into per game 
+metrics, so we can predict how many wins the team would have if each player were 
+exactly like that player. **2-point percentage** and **3-point percentage** are 
+both already normalised (since they are percentages), but we will need to convert 
+**defensive rebounds** and **turnovers**. To do this, we will divide
+each player's totals by minutes played, then multiply that number by 48 (the
+length of a game, excluding OT), then multiply by 5 (the number of players on
+the court).
+
+```{r}
+players <- player %>% 
+  filter(mp >= 1000) %>% # filtering out players with under 1000 minutes
+  mutate(drb = ((drb / mp) * 48) * 5, #normalising stats
+         tov = ((tov / mp) * 48) * 5)
+```
+
+Now, we can find the **predicted wins** for a team made up of that player:
+
+```{r}
+players <- players %>%
+  mutate(w_hat = predict(fit2, newdata = .)) #win predictions per player from the model
+```
+
+Before proceeding to the recommendations, we will each player's **predicted
+wins** within our model are normally distributed, using a histogram:
+
+```{r}
+qplot(w_hat, data = players, binwidth = 3, colour = I("red"))
+```
+We can see that **predicted wins** for our model are normally distributed.
+
+## Player Recommendations ##
+
+Below are the Top 20 players in our dataset, in order of predicted wins for a team
+comprised entirely of that player.
+
+```{r}
+players %>%
+  select(player_name, pos, salary, w_hat) %>% #selecting variables to show in list
+  arrange(desc(w_hat), salary) %>% #arrange in descending order of predicted wins
+  top_n(20) #show top 20
+```
+
+Before proceeding, it is noticeable in the above chart that the four highest
+ranked players (and 5 of the Top 10) are all centers. Though it may be tempting
+to assume then that centers are the most valuable position in basketball, this 
+is instead a function of the position's defensive responsibilities.
+With centers spending more of their time defending the rim, it naturally follows
+that they accumulate more defensive rebounds than players in other positions.
+This can be illustrated visually using a boxplot.
+
+```{r}
+players %>%
+  filter(pos == "C" | pos == "PF" | pos == "PG" | pos == "SF" | pos == "SG") %>% #filter out combo positions
+ggplot() +
+  geom_boxplot(mapping = aes(x = pos, y = drb, fill = pos), colour = "black") +
+  labs(title = "Defensive Rebounds by Position", #rename title
+       subtitle = "Centers produce more defensive rebounds than other position groups", #rename subtitle
+       x = "Position", #rename x-axis
+       y = "Defensive Rebounds", #rename y-axis
+       fill = "Position") #fill by position
+```
+
+The above chart confirms the effect of positional play on our player valuations,
+and justifies our decision to select the best players *per position*, rather
+than the highest valued players *overall*.
+
+Returning to our player selections, below is a scatterplot of all the players in
+our dataset coloured by position, for you to explore. The higher up a point is 
+on the plot, the higher the predicted wins; while salary increases as the points
+move to the right.
+
+```{r}
+player_plot <- players %>% #creates a new object for the plot
+  ggplot(mapping = aes(x = salary/1000000, y = w_hat, colour = pos, label = player_name)) +
+  geom_point() +
+  labs(title = "Predicted Wins vs Salary",
+       x = "Salary (Millions)",
+       y = "Predicted Wins",
+       colour = "Position")
+ggplotly(player_plot) #creates interactive plot from object
+```
+
+For simplification, we have identified the players in each position group with
+the highest predicted wins, and identified them on the chart below.
+
+```{r}
+best_in_nba <- players %>% #create object with best player in each position
+  group_by(pos) %>%
+  filter(row_number(desc(w_hat)) == 1) #selects the player ranked 1st per position in predicted wins
+
+players %>%
+  ggplot(mapping = aes(x = salary/1000000, y = w_hat, colour = pos)) +
+  geom_point() +
+  labs(title = "The Players with the Most Predicted Wins per Position",
+       x = "Salary (Millions)", 
+       y = "Predicted Wins",
+       colour = "Position") +
+  geom_text_repel(mapping = aes(label = player_name), data = best_in_nba) #adds labels for best players per position
+  
+```
+
+From the above, it can be seen that the best players identified by our model are:
+
+* C = **Domantas Sabonis (IND)** - $2,659,800
+* PF = **Pascal Siakam (TOR)** - $1,544,951
+* SF = **Andre Iguodala (GSW)** - $16,000,000
+* SG = **Joe Harris (BRK)** - $8,333,333
+* PG = **Stephen Curry (GSW)** - $37,457,154
+
+**TOTAL - $65,995,238**
+
+However, we must now return to the original task - to select the best five 
+starting players *the team can afford*.
+
+With a budget of **$118 million**, acquiring the above starting side would leave
+just **$52,004,762** to fill the remaining **10** roster positions. While we're
+not concerned with identifying who specifically these players should be, we
+nonetheless need to confirm that this would be *possible*.
+
+To test this, we'll perform a search for players whose salary is *less than* 
+**$5,200,476** (1/10th of our remaining budget). However, in order to be 
+competitive, we need to ensure that the bench is of a reasonable standard. So,
+we will further narrow down our search to players who are above average for their
+position in predicted wins. Doing so will ensure that even if our starters are 
+off the court, the team will remain competitive.
+
+Below is a count of the number of players per position who fit this description.
+
+```{r}
+players %>%
+  group_by(pos) %>% #group by position
+  filter(w_hat >= mean(w_hat) & salary <= 5200476) %>% #only show players with above average predicted wins AND salary under 5200476
+  summarise(Count = n()) #counts number of players per position who meet requirements
+```
+
+Since we only require **2** players per position in order to fill our bench, I
+am satisfied that there are sufficient affordable bench options to conclude that 
+the best starting players identified *are* affordable.
+
+So, our final recommendation is that:
+
+* C = **Domantas Sabonis (IND)** - $2,659,800
+* PF = **Pascal Siakam (TOR)** - $1,544,951
+* SF = **Andre Iguodala (GSW)** - $16,000,000
+* SG = **Joe Harris (BRK)** - $8,333,333
+* PG = **Stephen Curry (GSW)** - $37,457,154
+
+are **the best five starting players our team can afford**.
+
+## Summary ##
+
+This project developed a model for predicting wins in the NBA and applied this
+model to individual players, in order to identify **the best five starting 
+players our team can afford**.
+
+Key findings identified through the development of the model include:
+
+* Positive correlations between **2-point percentage**, **3-point percentage** 
+and **defensive rebounds** with wins;
+
+* A negative correlation between **turnovers** and wins;
+
+* Although **assists** and **blocks** appeared to be positively correlated
+during initial investigations, further analysis showed that these statistics 
+were not reliable for predicting wins.
+
+In order to successfully answer the question asked of me by the General Manager
+- to identify **the best five starting players our team can afford** - I broke
+down the question into two parts: who are the best five starting players, and 
+can we afford them?
+ 
+To identify **the best starting players**, the player statistics were normalised
+to represent their per-game contribution if an entire team were comprised 
+exclusively of that player. Then, the players were fitted into the model, with
+each player allocated a number of **predicted wins** for a team comprised
+exclusively of that player.
+
+In order to determine **if we can afford them**, I deducted their salary from 
+the total team budget ($118 million), leaving our remaining budget for filling 
+out the bench. Then, I counted all the players identified as above average for their
+position according to our model, whose salary is less than or equal to 1/10th
+of our bench budget. This process showed that it would be possible to fill our
+bench exclusively with above average players, *after* signing the best five 
+players identified.
+
+The five players recommended to the General Manager are:
+
+* C = **Domantas Sabonis (IND)** - $2,659,800
+* PF = **Pascal Siakam (TOR)** - $1,544,951
+* SF = **Andre Iguodala (GSW)** - $16,000,000
+* SG = **Joe Harris (BRK)** - $8,333,333
+* PG = **Stephen Curry (GSW)** - $37,457,154
+
+During the process, several limitations were identified. First, the Adjusted
+R-squared value indicates that our model explains approximately 68% of the 
+variation in wins. Interpreted differently though, that means that **32%** of
+the variation is *not accounted for* in this model.
+
+Second, the model over-values centers, due to their high contribution to 
+defensive rebounds.  Though I do not believe this significantly affected the 
+player selections (since players were compared within their own position groups), 
+it would need to be considered if creating a metric for determining the 
+*absolute value* of each player *independent of position*.
+
+Third, in much the same as way as defensive rebounds are impacted by position,
+turnovers are likely impacted by a player's involvement within their team's 
+offense. While we were able to normalise this statistic based on minutes
+played, ideally I would prefer to calculate a turnovers 'per touch' or 'per 
+pass', in order to ensure that players who are the focal point of their team's 
+offense are not disadvantaged in the model (as an aside, given Stephen Curry's high 
+contribution to his team, his relatively low number of turnovers is particularly
+impressive).
+
+## Epilogue ##
+
+**Domantas Sabonis** would go on to become a two-time NBA All-Star in 2020 and 
+2021. (4)
+
+After winning a championship in 2019 with the Raptors, **Pascal Siakam** became 
+an NBA All-Star in 2020. (5)
+
+In 2020, **Andre Iguodola** became the 10th player in history to reach six
+straight NBA Finals. (6)
+
+**Joe Harris** went on set the Brooklyn Nets franchise record for the fastest
+player to sink 100 3-pointers in a season in 2020. (7)
+
+In 2021, **Stephen Curry** became an NBA All-Star for the seventh time. (8)
+
+## Reference List ##
+
+1. Golliver B. NBA sets salary cap, free agency start date for 2020-21 season. 
+Washington Post [internet]. 2020 November 10 [cited 2021 May 8]. Available from:
+https://www.washingtonpost.com/sports/2020/11/10/sports-nba-salary-cap/
+
+2. Low Key NBA [internet]. Basketball Positions - NBA & NCAA Position Numbers 1-5; 
+2019 May 6 [cited 2021 May 8]. Available from: https://lowkeynba.com/basketball-positions-and-nba-basketball-position-numbers/
+
+3. University of Canberra Website [internet]. Canberra: University of Canberra; 
+2021. Data Description - Reproducible Data Analysis Project; c2021 [cited 2021 May 8].
+Available from: https://unicanberra.instructure.com/courses/9531/pages/data-description-reproducible-data-analysis-project
+
+4. Basketball Reference [internet]. Domantas Sabonis; c2021[cited 2021 May 8]. 
+Available from: https://www.basketball-reference.com/players/s/sabondo01.html
+
+5. Basketball Reference [internet]. Pascal Siakam; c2021[cited 2021 May 8]. Available from:
+https://www.basketball-reference.com/players/s/siakapa01.html
+
+6. Kelapire R. Andre Iguodala joins elite company with sixth straight trip to NBA
+Finals. SBNation[internet]. 2020 September 27 [cited 2021 May 8]. Available from:
+https://www.azdesertswarm.com/basketball/2020/9/27/21459282/andre-iguodala-nba-finals-six-straight-streak-heat-celtics-lakers-arizona-wildcats-nba
+
+7. Friar N. Joe Harris becomes fastest Nets player to 100 3-pointers made in a 
+season. Nets Wire[internet]. 2021 February 18 [cited 2021 May 8]. Available from:
+https://netswire.usatoday.com/2021/02/18/joe-harris-becomes-fastest-nets-player-to-100-3-pointers-made-in-a-season/
+
+8. Basketball Reference [internet]. Stephen Curry; c2021[cited 2021 May 8]. Available from: 
+https://www.basketball-reference.com/players/c/curryst01.html
+
