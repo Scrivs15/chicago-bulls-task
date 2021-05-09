@@ -49,8 +49,8 @@ process of the project;
 organise the project during development;
 * **background.css** - A css file setting out the Chicago Bulls logo as a background
 watermark in the html report;
-* **/data** - A data folder, containing /raw (raw csv files used in the project) and
-* **/processed** (processed files following tidying);
+* **/data** - A data folder, containing **/raw** (raw csv files used in the project) and
+**/processed** (processed files following tidying);
 * **/figs** - A figures folder, containing figures rendered from the project;
 * **/images** - An images folder, containing the Chicago Bulls logo referenced in 
 the background.css file.
